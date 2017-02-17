@@ -4,9 +4,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.tuple.ImmutableTriple;
 import org.apache.commons.lang3.tuple.Triple;
 import org.deeplearning4j.nn.conf.*;
+import org.deeplearning4j.nn.conf.graph.GraphVertex;
+import org.deeplearning4j.nn.conf.graph.LayerVertex;
+import org.deeplearning4j.nn.conf.graph.MergeVertex;
 import org.deeplearning4j.nn.conf.inputs.InputType;
+import org.deeplearning4j.nn.conf.layers.BasePretrainNetwork;
 import org.deeplearning4j.nn.conf.layers.FeedForwardLayer;
 import org.deeplearning4j.nn.conf.layers.Layer;
+import org.deeplearning4j.nn.graph.ComputationGraph;
 import org.deeplearning4j.nn.layers.FrozenLayer;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.weights.WeightInit;
@@ -192,7 +197,7 @@ public class TransferLearning {
          *
          * @return
          */
-        public MultiLayerNetwork buildMLN() {
+        public MultiLayerNetwork build() {
 
             if (!prepDone) {
                 doPrep();
@@ -328,5 +333,142 @@ public class TransferLearning {
                     .setInputType(this.inputType)
                     .confs(allConfs).build();
         }
+    }
+
+    public static class GraphBuilder {
+
+        private ComputationGraph origGraph;
+        private ComputationGraphConfiguration origConf;
+        private boolean pretrain = false;
+        private boolean backprop = true;
+        private BackpropType backpropType = BackpropType.Standard;
+        private int tbpttFwdLength = 20;
+        private int tbpttBackLength = 20;
+
+        protected Map<String, GraphVertex> vertices = new LinkedHashMap<>();
+        protected Map<String, List<String>> vertexInputs = new LinkedHashMap<>();
+        protected List<String> networkOutputs = new ArrayList<>();
+
+        //Once modified..
+        private NeuralNetConfiguration.Builder globalConfig;
+        public String frozenTill;
+        private Set<String> editedLayers = new HashSet<>();
+        private Map<String, Triple<Integer, WeightInit, WeightInit>> editedLayersMap = new HashMap<>();
+        protected Set<String> editedOutputs = new HashSet<>();
+
+        public GraphBuilder(ComputationGraph origGraph) {
+            this.origGraph = origGraph;
+            this.origConf = origGraph.getConfiguration();
+
+            this.backprop = origConf.isBackprop();
+            this.pretrain = origConf.isPretrain();
+            this.backpropType = origConf.getBackpropType();
+            this.tbpttBackLength  = origConf.getTbpttBackLength();
+            this.tbpttFwdLength = origConf.getTbpttFwdLength();
+
+            this.vertices = origConf.getVertices();
+            this.vertexInputs = origConf.getVertexInputs();
+            this.networkOutputs = origConf.getNetworkOutputs();
+        }
+
+        public GraphBuilder setTbpttFwdLength(int l) {
+            this.tbpttFwdLength = l;
+            return this;
+        }
+
+        public GraphBuilder setTbpttBackLength(int l) {
+            this.tbpttBackLength = l;
+            return this;
+        }
+
+        public GraphBuilder setFeatureExtractor(String layerName) {
+            this.frozenTill = layerName;
+            return this;
+        }
+
+        public GraphBuilder fineTuneConfiguration(NeuralNetConfiguration.Builder newDefaultConfBuilder) {
+            this.globalConfig = newDefaultConfBuilder;
+            for (Map.Entry<String, GraphVertex> gv : vertices.entrySet()) {
+                if (gv.getValue() instanceof LayerVertex) {
+                    LayerVertex lv = (LayerVertex) gv.getValue();
+                    Layer l = lv.getLayerConf().getLayer();
+                    //clear learning related configs
+                    l.setUpdater(null);
+                    l.setMomentum(Double.NaN);
+                    l.setWeightInit(null);
+                    l.setBiasInit(Double.NaN);
+                    l.setDist(null);
+                    l.setLearningRate(Double.NaN);
+                    l.setBiasLearningRate(Double.NaN);
+                    l.setLearningRateSchedule(null);
+                    l.setMomentumSchedule(null);
+                    l.setL1(Double.NaN);
+                    l.setL2(Double.NaN);
+                    l.setDropOut(Double.NaN);
+                    l.setRho(Double.NaN);
+                    l.setEpsilon(Double.NaN);
+                    l.setRmsDecay(Double.NaN);
+                    l.setAdamMeanDecay(Double.NaN);
+                    l.setAdamVarDecay(Double.NaN);
+                    l.setGradientNormalization(GradientNormalization.None);
+                    l.setGradientNormalizationThreshold(1.0);
+                    NeuralNetConfiguration.Builder builder = globalConfig.clone();
+                    builder.layer(l);
+                    vertices.put(l.getLayerName(), new LayerVertex(builder.build(), null));
+                }
+            }
+            return this;
+        }
+
+        public GraphBuilder nOutReplace(String layerName, int nOut, WeightInit scheme) {
+            editedLayers.add(layerName);
+            editedLayersMap.put(layerName, new ImmutableTriple<>(nOut, scheme, scheme));
+            return this;
+        }
+
+        public GraphBuilder nOutReplace(String layerName, int nOut, WeightInit scheme, WeightInit schemeNext) {
+            editedLayers.add(layerName);
+            editedLayersMap.put(layerName, new ImmutableTriple<>(nOut, scheme, schemeNext));
+            return this;
+        }
+
+        public GraphBuilder removeOutputVertex(String outputName) {
+            editedOutputs.add(outputName);
+            return this;
+        }
+
+        public GraphBuilder removeFromVertexToOutputVertex(String vertexFrom, String VertexTo) {
+            //FIXME - add to editedVertices
+            return this;
+        }
+
+        public GraphBuilder addLayer(String layerName, Layer layer, String... layerInputs) {
+            return addLayer(layerName, layer, null, layerInputs);
+        }
+
+        public GraphBuilder addLayer(String layerName, Layer layer, InputPreProcessor preProcessor, String... layerInputs) {
+            NeuralNetConfiguration.Builder builder = globalConfig.clone();
+            builder.layer(layer);
+            vertices.put(layerName, new LayerVertex(builder.build(), preProcessor));
+
+            //Automatically insert a MergeNode if layerInputs.length > 1
+            //Layers can only have 1 input
+            if (layerInputs != null && layerInputs.length > 1) {
+                String mergeName = layerName + "-merge";
+                //FIXME
+                addVertex(mergeName, new MergeVertex(), layerInputs);
+                this.vertexInputs.put(layerName, Collections.singletonList(mergeName));
+            } else if (layerInputs != null) {
+                this.vertexInputs.put(layerName, Arrays.asList(layerInputs));
+            }
+            layer.setLayerName(layerName);
+            return this;
+        }
+
+        public GraphBuilder addOutputs(String... outputNames) {
+            Collections.addAll(networkOutputs, outputNames);
+            return this;
+        }
+
     }
 }
