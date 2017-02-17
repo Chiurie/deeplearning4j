@@ -12,6 +12,7 @@ import org.deeplearning4j.nn.conf.layers.BasePretrainNetwork;
 import org.deeplearning4j.nn.conf.layers.FeedForwardLayer;
 import org.deeplearning4j.nn.conf.layers.Layer;
 import org.deeplearning4j.nn.graph.ComputationGraph;
+import org.deeplearning4j.nn.graph.vertex.VertexIndices;
 import org.deeplearning4j.nn.layers.FrozenLayer;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.weights.WeightInit;
@@ -345,6 +346,8 @@ public class TransferLearning {
         private int tbpttFwdLength = 20;
         private int tbpttBackLength = 20;
 
+        private ComputationGraphConfiguration.GraphBuilder editedConfigurationBuilder;
+
         protected Map<String, GraphVertex> vertices = new LinkedHashMap<>();
         protected Map<String, List<String>> vertexInputs = new LinkedHashMap<>();
         protected List<String> networkOutputs = new ArrayList<>();
@@ -388,6 +391,7 @@ public class TransferLearning {
 
         public GraphBuilder fineTuneConfiguration(NeuralNetConfiguration.Builder newDefaultConfBuilder) {
             this.globalConfig = newDefaultConfBuilder;
+            editedConfigurationBuilder = new ComputationGraphConfiguration.GraphBuilder(globalConfig); //returns a builder with no layer vertices
             for (Map.Entry<String, GraphVertex> gv : vertices.entrySet()) {
                 if (gv.getValue() instanceof LayerVertex) {
                     LayerVertex lv = (LayerVertex) gv.getValue();
@@ -412,17 +416,24 @@ public class TransferLearning {
                     l.setAdamVarDecay(Double.NaN);
                     l.setGradientNormalization(GradientNormalization.None);
                     l.setGradientNormalizationThreshold(1.0);
-                    NeuralNetConfiguration.Builder builder = globalConfig.clone();
-                    builder.layer(l);
-                    vertices.put(l.getLayerName(), new LayerVertex(builder.build(), null));
+                    String [] inputVertices = new String[lv.getInputVertices().length];
+                    for (int i=0;i<lv.getInputVertices().length;i++) {
+                        VertexIndices v = lv.getInputVertices()[i].getVertexName()???;
+
+                    }
+                    editedConfigurationBuilder.addLayer(l.getLayerName(),l,((LayerVertex) gv.getValue()).getPreProcessor(),inputVertices);
                 }
             }
             return this;
         }
 
         public GraphBuilder nOutReplace(String layerName, int nOut, WeightInit scheme) {
-            editedLayers.add(layerName);
-            editedLayersMap.put(layerName, new ImmutableTriple<>(nOut, scheme, scheme));
+            //editedLayers.add(layerName);
+            //editedLayersMap.put(layerName, new ImmutableTriple<>(nOut, scheme, scheme));
+            org.deeplearning4j.nn.api.Layer layer = origGraph.getLayer(layerName);
+            ((FeedForwardLayer) layer).overrideNOut(nOut,true);
+            //save off config here
+            editedConfigurationBuilder.addLayer(layerName,layer,layerInputs);
             return this;
         }
 
@@ -433,6 +444,7 @@ public class TransferLearning {
         }
 
         public GraphBuilder removeOutputVertex(String outputName) {
+            //rebuild computationGraphConfiguration
             editedOutputs.add(outputName);
             return this;
         }
@@ -443,7 +455,8 @@ public class TransferLearning {
         }
 
         public GraphBuilder addLayer(String layerName, Layer layer, String... layerInputs) {
-            return addLayer(layerName, layer, null, layerInputs);
+            editedConfigurationBuilder.addLayer(layerName,layer,layerInputs);
+            return this;
         }
 
         public GraphBuilder addLayer(String layerName, Layer layer, InputPreProcessor preProcessor, String... layerInputs) {

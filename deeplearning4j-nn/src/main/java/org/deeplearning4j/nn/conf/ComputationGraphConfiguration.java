@@ -17,29 +17,24 @@
  */
 package org.deeplearning4j.nn.conf;
 
-import org.deeplearning4j.nn.conf.layers.BasePretrainNetwork;
-import org.nd4j.linalg.activations.Activation;
-import org.nd4j.linalg.activations.IActivation;
-import org.nd4j.shade.jackson.databind.JsonNode;
-import org.nd4j.shade.jackson.databind.ObjectMapper;
-import org.nd4j.shade.jackson.databind.introspect.AnnotatedClass;
-import org.nd4j.shade.jackson.databind.jsontype.NamedType;
 import lombok.*;
-import org.apache.commons.lang3.ClassUtils;
 import org.deeplearning4j.nn.conf.graph.GraphVertex;
 import org.deeplearning4j.nn.conf.graph.LayerVertex;
 import org.deeplearning4j.nn.conf.graph.MergeVertex;
 import org.deeplearning4j.nn.conf.inputs.InputType;
+import org.deeplearning4j.nn.conf.layers.BasePretrainNetwork;
 import org.deeplearning4j.nn.conf.layers.Layer;
 import org.deeplearning4j.nn.conf.layers.OutputLayer;
-import org.reflections.Reflections;
+import org.nd4j.linalg.activations.Activation;
+import org.nd4j.linalg.activations.IActivation;
+import org.nd4j.shade.jackson.databind.JsonNode;
+import org.nd4j.shade.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * ComputationGraphConfiguration is a configuration object for neural networks with arbitrary connection structure.
@@ -428,6 +423,24 @@ public class ComputationGraphConfiguration implements Serializable, Cloneable {
 
         public GraphBuilder(NeuralNetConfiguration.Builder globalConfiguration) {
             this.globalConfiguration = globalConfiguration;
+        }
+
+        public GraphBuilder(ComputationGraphConfiguration newConfig, NeuralNetConfiguration.Builder globalConfiguration) {
+            this.vertexInputs = newConfig.getVertexInputs();
+            //FIXMEthis.networkInputTypes = newConfig.getN
+            this.networkOutputs = newConfig.getNetworkOutputs();
+            this.pretrain = newConfig.isPretrain();
+            this.backprop  = newConfig.isBackprop();
+            this.backpropType = newConfig.getBackpropType();
+            this.tbpttBackLength = newConfig.getTbpttBackLength();
+            this.tbpttFwdLength = newConfig.getTbpttFwdLength();
+            this.globalConfiguration = globalConfiguration;
+            this.vertices = newConfig.getVertices();
+            for (Map.Entry<String, GraphVertex> gv : vertices.entrySet()) {
+                if (gv.getValue() instanceof LayerVertex) {
+                    vertices.remove(gv.getKey()); //removes layer vertices
+                }
+            }
         }
 
         /**
